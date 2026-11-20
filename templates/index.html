@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Quote Helper</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header>
+  <h1>Quote Helper <span>material costs for Jobber quotes</span></h1>
+  <nav>
+    <button class="tab active" data-tab="estimate">New estimate</button>
+    <button class="tab" data-tab="quote">Check quote</button>
+    <button class="tab" data-tab="jobs">Saved jobs</button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+</header>
+
+<main>
+  <div id="setup-banner" class="banner hidden">
+    Add your Anthropic API key and location in <a href="#" data-goto="settings">Settings</a> to get local pricing.
+  </div>
+
+  <!-- ESTIMATE -->
+  <section id="tab-estimate" class="panel">
+    <form id="estimate-form">
+      <input type="hidden" name="job_id">
+      <label>Job name <small>(optional)</small>
+        <input name="name" placeholder="e.g. Smith – bathroom vanity swap">
+      </label>
+      <label>Assessment transcript
+        <textarea name="transcript" rows="9" placeholder="Paste the walkthrough transcript (from Jobber, Otter, voice memo, etc.)"></textarea>
+      </label>
+      <label>Job notes
+        <textarea name="notes" rows="5" placeholder="Measurements, customer requests, materials they picked, access issues…"></textarea>
+      </label>
+      <label>Photos <small>(JPG, PNG, HEIC – up to 20)</small>
+        <input type="file" name="photos" accept="image/*,.heic,.heif" multiple>
+      </label>
+      <div class="thumbs" data-for="photos"></div>
+      <button type="submit" class="primary">Estimate materials</button>
+    </form>
+  </section>
+
+  <!-- QUOTE CHECK -->
+  <section id="tab-quote" class="panel hidden">
+    <form id="quote-form">
+      <label>Link to a saved assessment <small>(optional – reuses its transcript, notes, photos and prices)</small>
+        <select name="job_id"><option value="">— none —</option></select>
+      </label>
+      <label>Job name <small>(optional)</small>
+        <input name="name">
+      </label>
+      <label>Jobber quote
+        <textarea name="quote_text" rows="10" placeholder="Paste the quote text from Jobber (line items, descriptions, totals)"></textarea>
+      </label>
+      <label>…or attach the quote PDF
+        <input type="file" name="quote_pdf" accept="application/pdf">
+      </label>
+      <label>Extra photos <small>(optional)</small>
+        <input type="file" name="photos" accept="image/*,.heic,.heif" multiple>
+      </label>
+      <div class="thumbs" data-for="photos"></div>
+      <fieldset>
+        <legend>Your costs <small>(optional – for net profit)</small></legend>
+        <div class="row">
+          <label>Labor hours <input name="labor_hours" type="number" step="0.25" min="0"></label>
+          <label>Labor cost / hr <input name="labor_rate" type="number" step="0.01" min="0"></label>
+          <label>Other costs $ <input name="other_costs" type="number" step="0.01" min="0"></label>
+        </div>
+      </fieldset>
+      <button type="submit" class="primary">Check material cost &amp; profit</button>
+    </form>
+  </section>
+
+  <!-- JOBS -->
+  <section id="tab-jobs" class="panel hidden">
+    <table class="jobs">
+      <thead><tr><th>Job</th><th>Created</th><th>Est. materials</th><th>Quote</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="empty hidden">No saved jobs yet.</p>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" class="panel hidden">
+    <form id="settings-form">
+      <label>Anthropic API key <small id="key-hint"></small>
+        <input name="api_key" type="password" placeholder="sk-ant-…  (leave blank to keep current key)" autocomplete="off">
+      </label>
+      <p class="help">Get one at console.anthropic.com → API Keys. It is stored only on this Mac.</p>
+      <label>Business name <input name="business_name"></label>
+      <label>Trade / type of work <input name="trade" placeholder="e.g. handyman, painting, flooring, remodeling"></label>
+      <div class="row">
+        <label>City <input name="city"></label>
+        <label>State <input name="state" maxlength="20"></label>
+        <label>ZIP <input name="zip" maxlength="10"></label>
+      </div>
+      <div class="row">
+        <label>Sales tax on materials % <input name="sales_tax_pct" type="number" step="0.001" min="0"></label>
+        <label>Default waste % <input name="default_waste_pct" type="number" step="0.5" min="0"></label>
+      </div>
+      <label>Preferred suppliers <input name="preferred_suppliers" placeholder="Home Depot, Lowe's, ABC Supply, local lumber yard…"></label>
+      <button type="submit" class="primary">Save settings</button>
+      <span id="settings-saved" class="saved hidden">Saved ✓</span>
+    </form>
+  </section>
+
+  <!-- PROGRESS -->
+  <section id="progress" class="panel hidden">
+    <h2><span class="spinner"></span> Researching prices… <small>this usually takes 2–6 minutes</small></h2>
+    <ol id="progress-log"></ol>
+  </section>
+
+  <div id="error" class="error hidden"></div>
+
+  <!-- RESULT -->
+  <section id="result" class="hidden"></section>
+</main>
+
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
