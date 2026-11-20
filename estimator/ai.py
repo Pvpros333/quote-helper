@@ -177,31 +177,26 @@ def _run(settings: dict, user_content: list, schema: dict, progress: Progress) -
         return _final_json(response.content)
 
 
-def build_estimate(settings: dict, transcript: str, notes: str, photos: list[dict],
-                   progress: Progress) -> dict:
-    content: list = list(photos)
-    content.append({"type": "text", "text": (
+def estimate_request_text(transcript: str, notes: str, n_photos: int) -> str:
+    return (
         "Estimate the material cost for this job.\n\n"
         f"<assessment_transcript>\n{transcript.strip() or '(none provided)'}\n</assessment_transcript>\n\n"
         f"<job_notes>\n{notes.strip() or '(none provided)'}\n</job_notes>\n\n"
-        f"{len(photos)} photo(s) from the assessment are attached above."
-    )})
-    return _run(settings, content, schemas.ESTIMATE, progress)
+        f"{n_photos} photo(s) from the assessment are attached."
+    )
 
 
-def check_quote(settings: dict, quote_text: str, quote_pdf: dict | None, prior_job: dict | None,
-                photos: list[dict], progress: Progress) -> dict:
-    content: list = list(photos)
-    if quote_pdf:
-        content.append(quote_pdf)
+def quote_request_text(quote_text: str, has_pdf: bool, prior_job: dict | None, n_photos: int) -> str:
     parts = [
         "Here is a finished quote from Jobber. Extract the quote's line items and totals, then work out "
         "the materials needed to do exactly the quoted work and price them with current prices.",
-        f"<jobber_quote>\n{quote_text.strip() or '(see attached PDF)'}\n</jobber_quote>",
+        f"<jobber_quote>\n{quote_text.strip() or '(see the attached quote PDF)'}\n</jobber_quote>",
     ]
+    if has_pdf and quote_text.strip():
+        parts.append("The quote PDF is also attached.")
     if prior_job:
         parts.append(
-            "This job was assessed earlier. Use it for context and to reuse prices you already found "
+            "This job was assessed earlier. Use it for context and to reuse prices already found "
             "(re-check the expensive items). Note any scope differences between the quote and the assessment.\n"
             f"<assessment_transcript>\n{prior_job.get('transcript', '')}\n</assessment_transcript>\n"
             f"<job_notes>\n{prior_job.get('notes', '')}\n</job_notes>"
@@ -209,7 +204,95 @@ def check_quote(settings: dict, quote_text: str, quote_pdf: dict | None, prior_j
         if prior_job.get("estimate"):
             est = {k: prior_job["estimate"].get(k) for k in ("scope_of_work", "line_items", "assumptions")}
             parts.append(f"<earlier_material_estimate>\n{json.dumps(est)}\n</earlier_material_estimate>")
-    if photos:
-        parts.append(f"{len(photos)} photo(s) from the assessment are attached above.")
-    content.append({"type": "text", "text": "\n\n".join(parts)})
-    return _run(settings, content, schemas.QUOTE_CHECK, progress)
+    if n_photos:
+        parts.append(f"{n_photos} photo(s) from the assessment are attached.")
+    return "\n\n".join(parts)
+
+
+def build_estimate(settings: dict, transcript: str, notes: str, photos: list[dict],
+                   progress: Progress) -> dict:
+    content: list = list(photos)
+    content.append({"type": "text", "text": estimate_request_text(transcript, notes, len(photos))})
+    return normalize(_run(settings, content, schemas.ESTIMATE, progress), schemas.ESTIMATE)
+
+
+def check_quote(settings: dict, quote_text: str, quote_pdf: dict | None, prior_job: dict | None,
+                photos: list[dict], progress: Progress) -> dict:
+    content: list = list(photos)
+    if quote_pdf:
+        content.append(quote_pdf)
+    content.append({"type": "text",
+                    "text": quote_request_text(quote_text, bool(quote_pdf), prior_job, len(photos))})
+    return normalize(_run(settings, content, schemas.QUOTE_CHECK, progress), schemas.QUOTE_CHECK)
+
+
+# ---------- manual mode: run the prompt in the Claude app, paste the reply back ----------
+
+SCHEMAS = {"estimate": schemas.ESTIMATE, "quote_check": schemas.QUOTE_CHECK}
+
+
+def manual_prompt(settings: dict, request_text: str, kind: str) -> str:
+    """One self-contained prompt to paste into the Claude app (claude.ai / desktop / mobile)."""
+    return f"""{system_prompt(settings)}
+
+Use web search to look up current prices. Do not skip the searching.
+
+{request_text}
+
+When you are finished, reply with ONLY one JSON object inside a ```json code block, matching this JSON schema \
+(every field is required; use "" or 0 when something is unknown). It will be pasted into a program, so do not \
+put any text after the code block.
+
+{json.dumps(SCHEMAS[kind], separators=(",", ":"))}
+"""
+
+
+def parse_pasted_reply(text: str, kind: str) -> dict:
+    try:
+        data = extract_json(text)
+    except (ValueError, json.JSONDecodeError) as e:
+        raise EstimateError(
+            "Couldn't find the results in what you pasted. Copy Claude's whole final reply "
+            "(the part in the code block) and paste it again."
+        ) from e
+    if not isinstance(data, dict) or not isinstance(data.get("line_items"), list):
+        raise EstimateError("The pasted reply doesn't contain a material list. Ask Claude to finish, then paste again.")
+    return normalize(data, SCHEMAS[kind])
+
+
+def _coerce(value, schema: dict):
+    t = schema.get("type")
+    if t == "object":
+        return normalize(value if isinstance(value, dict) else {}, schema)
+    if t == "array":
+        if not isinstance(value, list):
+            return []
+        return [_coerce(v, schema.get("items", {})) for v in value]
+    if t in ("number", "integer"):
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        try:
+            return float(re.sub(r"[^0-9.\-]", "", str(value)) or 0)
+        except ValueError:
+            return 0.0
+    if t == "boolean":
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "yes", "y", "1")
+        return bool(value)
+    if t == "string":
+        value = "" if value is None else str(value)
+        enum = schema.get("enum")
+        if enum and value not in enum:
+            return "low" if "low" in enum else enum[0]
+        return value
+    return value
+
+
+def normalize(data: dict, schema: dict) -> dict:
+    """Fill in missing fields and fix types so slightly-off JSON still renders and totals correctly."""
+    out = dict(data)
+    for key, sub in schema.get("properties", {}).items():
+        out[key] = _coerce(data.get(key), sub)
+    return out

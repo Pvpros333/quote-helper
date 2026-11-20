@@ -87,7 +87,7 @@ def load_job(job_id: str) -> dict | None:
     return json.loads(path.read_text())
 
 
-def _photo_dir(job_id: str) -> Path:
+def photo_dir(job_id: str) -> Path:
     return data_dir() / "jobs" / f"{_safe_id(job_id)}_photos"
 
 
@@ -95,7 +95,7 @@ def save_photos(job_id: str, blocks: list[dict]) -> None:
     """Store the processed JPEGs so a later quote check can reuse them."""
     if not blocks:
         return
-    d = _photo_dir(job_id)
+    d = photo_dir(job_id)
     d.mkdir(exist_ok=True)
     start = len(list(d.glob("*.jpg")))
     for i, block in enumerate(blocks, start=start + 1):
@@ -103,7 +103,7 @@ def save_photos(job_id: str, blocks: list[dict]) -> None:
 
 
 def load_photos(job_id: str) -> list[dict]:
-    d = _photo_dir(job_id)
+    d = photo_dir(job_id)
     if not d.exists():
         return []
     return [{
@@ -114,13 +114,13 @@ def load_photos(job_id: str) -> list[dict]:
 
 
 def photo_count(job_id: str) -> int:
-    d = _photo_dir(job_id)
+    d = photo_dir(job_id)
     return len(list(d.glob("*.jpg"))) if d.exists() else 0
 
 
 def delete_job(job_id: str) -> bool:
     path = data_dir() / "jobs" / f"{_safe_id(job_id)}.json"
-    shutil.rmtree(_photo_dir(job_id), ignore_errors=True)
+    shutil.rmtree(photo_dir(job_id), ignore_errors=True)
     if path.exists():
         path.unlink()
         return True
@@ -140,5 +140,6 @@ def list_jobs() -> list[dict]:
             "created_at": job.get("created_at"),
             "has_estimate": bool(job.get("estimate")),
             "has_quote_check": bool(job.get("quote_check")),
+            "pending": (job.get("pending") or {}).get("kind"),
         })
     return jobs

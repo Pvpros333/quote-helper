@@ -5,6 +5,8 @@ Run:  python app.py   (opens http://127.0.0.1:5055 in your browser)
 import csv
 import io
 import os
+import platform
+import subprocess
 import threading
 import traceback
 import uuid
@@ -110,32 +112,67 @@ def post_settings():
 
 # ---------- AI tasks ----------
 
-@app.post("/api/estimate")
-def start_estimate():
-    settings = storage.load_settings()
-    if not _have_credentials(settings):
-        return jsonify(error="Add your Anthropic API key in Settings first."), 400
+class FormError(Exception):
+    pass
+
+
+def _estimate_form():
     transcript = request.form.get("transcript", "")
     notes = request.form.get("notes", "")
     try:
         photos = _photos_from_request()
     except ValueError as e:
-        return jsonify(error=str(e)), 400
+        raise FormError(str(e))
     if not (transcript.strip() or notes.strip() or photos):
-        return jsonify(error="Add a transcript, notes, or photos first."), 400
-
+        raise FormError("Add a transcript, notes, or photos first.")
     job = storage.load_job(request.form.get("job_id", "")) or {}
     job.update(name=request.form.get("name", "").strip() or job.get("name", ""),
                transcript=transcript, notes=notes)
+    return job, transcript, notes, photos
+
+
+def _quote_form():
+    quote_text = request.form.get("quote_text", "")
+    pdf = request.files.get("quote_pdf")
+    quote_pdf = images.pdf_to_block(pdf.read()) if pdf and pdf.filename else None
+    if not (quote_text.strip() or quote_pdf):
+        raise FormError("Paste the Jobber quote or attach its PDF.")
+    try:
+        new_photos = _photos_from_request()
+    except ValueError as e:
+        raise FormError(str(e))
+    job = storage.load_job(request.form.get("job_id", "")) or {}
+    prior = dict(job) if job.get("transcript") or job.get("notes") or job.get("estimate") else None
+    saved_photos = storage.load_photos(job["id"]) if job.get("id") else []
+    labor = {"hours": _num("labor_hours"), "rate": _num("labor_rate"), "other": _num("other_costs")}
+    if request.form.get("name", "").strip():
+        job["name"] = request.form["name"].strip()
+    return job, prior, quote_text, quote_pdf, new_photos, saved_photos, labor
+
+
+def _store_result(job: dict, kind: str, result: dict, new_photos: list[dict]) -> str:
+    job[kind] = result
+    job.pop("pending", None)
+    if not job.get("name"):
+        job["name"] = result.get("job_name", "")
+    saved = storage.save_job(job)
+    storage.save_photos(saved["id"], new_photos)
+    return saved["id"]
+
+
+@app.post("/api/estimate")
+def start_estimate():
+    settings = storage.load_settings()
+    if not _have_credentials(settings):
+        return jsonify(error="Add your Anthropic API key in Settings, or use \"Copy prompt\" instead."), 400
+    try:
+        job, transcript, notes, photos = _estimate_form()
+    except FormError as e:
+        return jsonify(error=str(e)), 400
 
     def work(progress):
         result = ai.build_estimate(settings, transcript, notes, photos, progress)
-        job["estimate"] = result
-        if not job.get("name"):
-            job["name"] = result.get("job_name", "")
-        saved = storage.save_job(job)
-        storage.save_photos(saved["id"], photos)
-        return saved["id"]
+        return _store_result(job, "estimate", result, photos)
 
     return jsonify(task_id=_start_task(work))
 
@@ -144,37 +181,91 @@ def start_estimate():
 def start_quote_check():
     settings = storage.load_settings()
     if not _have_credentials(settings):
-        return jsonify(error="Add your Anthropic API key in Settings first."), 400
-    quote_text = request.form.get("quote_text", "")
-    pdf = request.files.get("quote_pdf")
-    quote_pdf = images.pdf_to_block(pdf.read()) if pdf and pdf.filename else None
-    if not (quote_text.strip() or quote_pdf):
-        return jsonify(error="Paste the Jobber quote or attach its PDF."), 400
+        return jsonify(error="Add your Anthropic API key in Settings, or use \"Copy prompt\" instead."), 400
     try:
-        new_photos = _photos_from_request()
-    except ValueError as e:
+        job, prior, quote_text, quote_pdf, new_photos, saved_photos, labor = _quote_form()
+    except FormError as e:
         return jsonify(error=str(e)), 400
-
-    job = storage.load_job(request.form.get("job_id", "")) or {}
-    prior = dict(job) if job.get("transcript") or job.get("notes") or job.get("estimate") else None
-    photos = (storage.load_photos(job["id"]) if job.get("id") else []) + new_photos
-    photos = photos[: images.MAX_PHOTOS]
-    labor = {"hours": _num("labor_hours"), "rate": _num("labor_rate"), "other": _num("other_costs")}
-    if request.form.get("name", "").strip():
-        job["name"] = request.form["name"].strip()
+    photos = (saved_photos + new_photos)[: images.MAX_PHOTOS]
 
     def work(progress):
         result = ai.check_quote(settings, quote_text, quote_pdf, prior, photos, progress)
-        result["labor"] = labor
-        result["quote_text"] = quote_text
-        job["quote_check"] = result
-        if not job.get("name"):
-            job["name"] = result.get("job_name", "")
-        saved = storage.save_job(job)
-        storage.save_photos(saved["id"], new_photos)
-        return saved["id"]
+        result.update(labor=labor, quote_text=quote_text)
+        return _store_result(job, "quote_check", result, new_photos)
 
     return jsonify(task_id=_start_task(work))
+
+
+# ---------- manual mode (no API key): copy prompt -> Claude app -> paste reply ----------
+
+@app.post("/api/prompt/estimate")
+def prompt_estimate():
+    try:
+        job, transcript, notes, photos = _estimate_form()
+    except FormError as e:
+        return jsonify(error=str(e)), 400
+    text = ai.estimate_request_text(transcript, notes, len(photos))
+    job["pending"] = {"kind": "estimate", "prompt": ai.manual_prompt(storage.load_settings(), text, "estimate"),
+                      "photos": len(photos), "pdf": False}
+    saved = storage.save_job(job)
+    storage.save_photos(saved["id"], photos)
+    return jsonify(job_id=saved["id"])
+
+
+@app.post("/api/prompt/check-quote")
+def prompt_quote_check():
+    try:
+        job, prior, quote_text, quote_pdf, new_photos, saved_photos, labor = _quote_form()
+    except FormError as e:
+        return jsonify(error=str(e)), 400
+    n_photos = min(len(saved_photos) + len(new_photos), images.MAX_PHOTOS)
+    text = ai.quote_request_text(quote_text, bool(quote_pdf), prior, n_photos)
+    job["pending"] = {"kind": "quote_check", "prompt": ai.manual_prompt(storage.load_settings(), text, "quote_check"),
+                      "photos": n_photos, "pdf": bool(quote_pdf), "labor": labor, "quote_text": quote_text}
+    saved = storage.save_job(job)
+    storage.save_photos(saved["id"], new_photos)
+    return jsonify(job_id=saved["id"])
+
+
+@app.post("/api/jobs/<job_id>/import")
+def import_reply(job_id):
+    j = storage.load_job(job_id)
+    if not j or not j.get("pending"):
+        return jsonify(error="This job isn't waiting for a Claude reply."), 404
+    pending = j["pending"]
+    try:
+        result = ai.parse_pasted_reply((request.get_json(force=True) or {}).get("text", ""), pending["kind"])
+    except ai.EstimateError as e:
+        return jsonify(error=str(e)), 400
+    if pending["kind"] == "quote_check":
+        result.update(labor=pending.get("labor", {}), quote_text=pending.get("quote_text", ""))
+    _store_result(j, pending["kind"], result, [])
+    return jsonify(_with_totals(j))
+
+
+@app.post("/api/jobs/<job_id>/cancel-pending")
+def cancel_pending(job_id):
+    j = storage.load_job(job_id)
+    if not j:
+        return jsonify(error="Job not found"), 404
+    j.pop("pending", None)
+    if not (j.get("estimate") or j.get("quote_check")):
+        storage.delete_job(job_id)
+        return jsonify(deleted=True)
+    storage.save_job(j)
+    return jsonify(_with_totals(j))
+
+
+@app.post("/api/jobs/<job_id>/reveal-photos")
+def reveal_photos(job_id):
+    """Open the job's saved photos in Finder so they can be dragged into the Claude app."""
+    d = storage.photo_dir(job_id)
+    if not d.exists() or not any(d.iterdir()):
+        return jsonify(error="No saved photos for this job."), 404
+    if platform.system() != "Darwin":
+        return jsonify(path=str(d))
+    subprocess.run(["open", str(d)], check=False)
+    return jsonify(opened=True, path=str(d))
 
 
 @app.get("/api/tasks/<task_id>")

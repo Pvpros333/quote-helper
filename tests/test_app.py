@@ -97,3 +97,42 @@ def test_estimate_then_quote_check_flow(client, monkeypatch):
     csv_text = client.get(f"/api/jobs/{job['id']}/csv?kind=estimate").get_data(as_text=True)
     assert "Paint" in csv_text
     assert client.delete(f"/api/jobs/{job['id']}").get_json()["deleted"]
+
+
+def test_manual_mode_without_api_key(client):
+    # no API key: the one-click endpoint refuses, the copy-prompt flow works
+    assert client.post("/api/estimate", data={"notes": "x"}).status_code == 400
+    r = client.post("/api/prompt/estimate", data={"notes": "paint 12x12 room",
+                                                  "photos": (io.BytesIO(jpeg_bytes()), "a.jpg")},
+                    content_type="multipart/form-data")
+    job_id = r.get_json()["job_id"]
+    job = client.get(f"/api/jobs/{job_id}").get_json()
+    assert job["pending"]["kind"] == "estimate" and job["pending"]["photos"] == 1
+    assert "paint 12x12 room" in job["pending"]["prompt"] and '"line_items"' in job["pending"]["prompt"]
+    assert client.get("/api/jobs").get_json()[0]["pending"] == "estimate"
+
+    bad = client.post(f"/api/jobs/{job_id}/import", json={"text": "I couldn't find prices, sorry"})
+    assert bad.status_code == 400
+
+    reply = "Here's your estimate:\n```json\n" + __import__("json").dumps(FAKE_ESTIMATE) + "\n```"
+    job = client.post(f"/api/jobs/{job_id}/import", json={"text": reply}).get_json()
+    assert "pending" not in job and job["estimate"]["totals"]["expected"] == 93.0
+    assert job["name"] == "Test job"
+
+    # quote check against the same job, via prompt
+    r = client.post("/api/prompt/check-quote", data={"job_id": job_id, "quote_text": "Paint room $500",
+                                                     "labor_hours": "2", "labor_rate": "50"})
+    job = client.get(f"/api/jobs/{r.get_json()['job_id']}").get_json()
+    assert job["pending"]["kind"] == "quote_check" and job["pending"]["photos"] == 1
+    assert "earlier_material_estimate" in job["pending"]["prompt"]
+    qc = {"quote_total": "$500.00", "line_items": [{"item": "Paint", "quantity": "2", "unit_price": "40"}]}
+    job = client.post(f"/api/jobs/{job_id}/import", json={"text": __import__("json").dumps(qc)}).get_json()
+    assert job["quote_check"]["profit"]["expected"]["net_profit"] == 500 - 80 - 100
+    assert job["estimate"]  # earlier estimate kept
+
+
+def test_cancel_pending_deletes_empty_draft(client):
+    r = client.post("/api/prompt/estimate", data={"notes": "x"})
+    job_id = r.get_json()["job_id"]
+    assert client.post(f"/api/jobs/{job_id}/cancel-pending").get_json()["deleted"]
+    assert client.get(f"/api/jobs/{job_id}").status_code == 404

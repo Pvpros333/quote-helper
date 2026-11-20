@@ -32,3 +32,18 @@ def test_tools_include_location_only_when_set():
     tools = ai._tools({"city": "Austin", "state": "TX"})
     assert tools[0]["user_location"]["city"] == "Austin"
     assert "user_location" not in ai._tools({})[0]
+
+
+def test_normalize_fills_and_coerces():
+    from estimator import schemas
+    data = ai.normalize({"quote_total": "$1,234.50", "line_items": [{"item": "x", "quantity": "3",
+                         "is_local": "yes", "confidence": "very"}]}, schemas.QUOTE_CHECK)
+    assert data["quote_total"] == 1234.5 and data["warnings"] == [] and data["job_name"] == ""
+    item = data["line_items"][0]
+    assert item["quantity"] == 3.0 and item["unit_price"] == 0.0 and item["is_local"] is True
+    assert item["confidence"] == "low" and item["source_url"] == ""
+
+
+def test_manual_prompt_contains_schema_and_location():
+    p = ai.manual_prompt({"city": "Austin", "state": "TX", "zip": "78701"}, "REQUEST", "estimate")
+    assert "78701" in p and "REQUEST" in p and "```json" in p and '"questions_to_confirm"' in p

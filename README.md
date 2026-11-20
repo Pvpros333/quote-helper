@@ -10,10 +10,12 @@ Totals include waste %, a consumables allowance and your sales tax. You can chan
 ## Setup (one time)
 
 1. Install Python 3 from <https://www.python.org/downloads/macos/> if you don't have it.
-2. Get an Anthropic API key at <https://console.anthropic.com> (API Keys). Usage is billed per request, roughly $1–3 per estimate, mostly from the web searches and reading store pages.
+2. Choose how the pricing work gets done:
+   - **With your Claude subscription (no API key):** use the **Copy prompt for Claude app** buttons. The app writes the prompt, you paste it into Claude (claude.ai, desktop or phone app) with **Web search** turned on, then paste Claude's reply back into the app. It costs nothing extra, but counts toward your plan's usage limits.
+   - **With an Anthropic API key (one click):** get a key at <https://console.anthropic.com> (API Keys) and add it in Settings. It's billed per request, roughly $1–3 per estimate.
 3. Double-click **`Start Quote Helper.command`**. If macOS blocks it, right-click it and choose **Open**, then click **Open** again.
    The first launch takes about a minute to install. After that, your browser opens to the app.
-4. Open **Settings**. Enter your API key, city/state/ZIP (used for local pricing), sales tax %, and preferred suppliers.
+4. Open **Settings**. Enter your city/state/ZIP (used for local pricing), sales tax %, preferred suppliers, and your API key if you have one.
 
 Leave the Terminal window open while you use the app. Close it (or press Ctrl+C) to quit.
 
@@ -21,6 +23,7 @@ Leave the Terminal window open while you use the app. Close it (or press Ctrl+C)
 
 - The more measurements in the transcript or notes, the better the quantities.
 - Check the **low confidence** lines first. Those prices couldn't be verified online and were estimated.
+- In copy-prompt mode, a job waiting for Claude's reply shows as "waiting for Claude reply" under **Saved jobs**. You can come back to it later. **Show photos in Finder** opens the job's saved photos so you can drag them into Claude.
 - An estimate takes 2–6 minutes while it searches and reads store pages. You can watch its progress on screen.
 
 ## Where your data lives

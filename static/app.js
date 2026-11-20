@@ -57,7 +57,8 @@ $("#settings-form").addEventListener("submit", async (e) => {
 });
 async function checkSetup() {
   const s = await (await fetch("/api/settings")).json();
-  $("#setup-banner").classList.toggle("hidden", s.api_key_set && !!s.zip);
+  document.body.classList.toggle("no-key", !s.api_key_set);
+  $("#setup-banner").classList.toggle("hidden", !!s.zip);
 }
 
 // ---------- running AI tasks ----------
@@ -90,6 +91,34 @@ async function runTask(url, form) {
   $("#progress").classList.add("hidden");
   btn.disabled = false;
 }
+// manual mode: build the prompt, then show the copy / paste steps
+$$("[data-manual]").forEach((btn) => btn.addEventListener("click", async () => {
+  hideResult();
+  const form = btn.closest("form");
+  btn.disabled = true;
+  try {
+    const res = await fetch(btn.dataset.manual, { method: "POST", body: new FormData(form) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return showError(body.error || "Request failed");
+    await openJob(body.job_id);
+    copyPrompt(true);
+  } finally { btn.disabled = false; }
+}));
+
+async function copyPrompt(silent = false) {
+  const text = (currentJob && currentJob.pending && currentJob.pending.prompt) || "";
+  let ok = false;
+  try { await navigator.clipboard.writeText(text); ok = true; } catch {
+    const ta = $("#prompt-text");
+    if (ta) { ta.closest("details").open = true; ta.select(); try { ok = document.execCommand("copy"); } catch {} }
+  }
+  const tag = $("#copied");
+  if (tag) {
+    tag.textContent = ok ? "Copied ✓" : (silent ? "" : "Select the prompt below and press ⌘C");
+    tag.classList.remove("hidden");
+  }
+}
+
 $("#estimate-form").addEventListener("submit", (e) => { e.preventDefault(); runTask("/api/estimate", e.target); });
 $("#quote-form").addEventListener("submit", (e) => { e.preventDefault(); runTask("/api/check-quote", e.target); });
 
@@ -99,7 +128,7 @@ async function loadJobs() {
   const tb = $("#tab-jobs tbody");
   tb.innerHTML = jobs.map((j) => `
     <tr>
-      <td><a data-open="${esc(j.id)}">${esc(j.name)}</a></td>
+      <td><a data-open="${esc(j.id)}">${esc(j.name || "(untitled job)")}</a>${j.pending ? ' <span class="pill wait">waiting for Claude reply</span>' : ""}</td>
       <td>${esc((j.created_at || "").replace("T", " ").slice(0, 16))}</td>
       <td class="num">${j.has_estimate ? money(j.estimate_total) : "—"}</td>
       <td class="num">${j.has_quote_check ? money(j.quote_total) : "—"}</td>
@@ -172,6 +201,28 @@ function itemsTable(kind, data) {
 function renderJob(scroll = true) {
   const j = currentJob;
   let html = "";
+  const pd = j.pending;
+  if (pd) {
+    const what = pd.kind === "estimate" ? "material estimate" : "quote check";
+    html += `<div class="card pending">
+      <h2>Run the ${what} in your Claude app${j.name ? " – " + esc(j.name) : ""}</h2>
+      <ol class="steps">
+        <li><button class="primary" data-copy>Copy prompt</button> <span id="copied" class="saved hidden"></span><br>
+          Open <a href="https://claude.ai/new" target="_blank" rel="noopener">claude.ai</a> or the Claude app and start a <b>new chat</b>.
+          Make sure <b>Web search</b> is on (in the “Search and tools” menu).</li>
+        <li>Paste the prompt (⌘V).
+          ${pd.photos ? `Attach the ${pd.photos} photo(s) too. <button data-reveal>Show photos in Finder</button>` : ""}
+          ${pd.pdf ? "Attach the Jobber quote PDF too." : ""} Then send it.</li>
+        <li>Wait for Claude to finish. It searches stores, which takes a few minutes. Then copy its final reply.
+          The quickest way is the copy button on the code block.</li>
+        <li>Paste Claude’s reply here:
+          <textarea id="reply-text" rows="6" placeholder="Paste Claude's reply here"></textarea>
+          <button class="primary" data-import>Import results</button>
+          <button class="link" data-cancel>Cancel</button></li>
+      </ol>
+      <details><summary>Show the prompt</summary><textarea id="prompt-text" rows="8" readonly>${esc(pd.prompt)}</textarea></details>
+    </div>`;
+  }
   const qc = j.quote_check;
   if (qc) {
     const p = qc.profit, e = p.expected;
@@ -262,6 +313,27 @@ $("#result").addEventListener("click", async (e) => {
       body: JSON.stringify({ kind: rm.dataset.kind, delete: +rm.dataset.remove }),
     });
     currentJob = await res.json(); renderJobKeepScroll();
+  }
+  if (e.target.closest("[data-copy]")) copyPrompt();
+  if (e.target.closest("[data-reveal]")) {
+    const res = await fetch(`/api/jobs/${currentJob.id}/reveal-photos`, { method: "POST" });
+    const b = await res.json();
+    if (!res.ok) showError(b.error); else if (!b.opened) alert("Photos are saved in:\n" + b.path);
+  }
+  if (e.target.closest("[data-import]")) {
+    const text = $("#reply-text").value;
+    if (!text.trim()) return showError("Paste Claude's reply first.");
+    const res = await fetch(`/api/jobs/${currentJob.id}/import`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }),
+    });
+    const b = await res.json();
+    if (!res.ok) return showError(b.error);
+    $("#error").classList.add("hidden");
+    currentJob = b; renderJob();
+  }
+  if (e.target.closest("[data-cancel]") && confirm("Cancel this? The prompt will be discarded.")) {
+    const b = await (await fetch(`/api/jobs/${currentJob.id}/cancel-pending`, { method: "POST" })).json();
+    if (b.deleted) hideResult(); else { currentJob = b; renderJob(); }
   }
   const cq = e.target.closest("[data-check-quote]");
   if (cq) {

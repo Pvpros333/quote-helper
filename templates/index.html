@@ -19,7 +19,7 @@
 
 <main>
   <div id="setup-banner" class="banner hidden">
-    Add your Anthropic API key and location in <a href="#" data-goto="settings">Settings</a> to get local pricing.
+    Add your location in <a href="#" data-goto="settings">Settings</a> so prices come from stores near you.
   </div>
 
   <!-- ESTIMATE -->
@@ -39,7 +39,10 @@
         <input type="file" name="photos" accept="image/*,.heic,.heif" multiple>
       </label>
       <div class="thumbs" data-for="photos"></div>
-      <button type="submit" class="primary">Estimate materials</button>
+      <div class="buttons">
+        <button type="submit" class="primary api-only">Estimate materials</button>
+        <button type="button" class="manual-btn" data-manual="/api/prompt/estimate">Copy prompt for Claude app</button>
+      </div>
     </form>
   </section>
 
@@ -70,7 +73,10 @@
           <label>Other costs $ <input name="other_costs" type="number" step="0.01" min="0"></label>
         </div>
       </fieldset>
-      <button type="submit" class="primary">Check material cost &amp; profit</button>
+      <div class="buttons">
+        <button type="submit" class="primary api-only">Check material cost &amp; profit</button>
+        <button type="button" class="manual-btn" data-manual="/api/prompt/check-quote">Copy prompt for Claude app</button>
+      </div>
     </form>
   </section>
 
@@ -89,7 +95,8 @@
       <label>Anthropic API key <small id="key-hint"></small>
         <input name="api_key" type="password" placeholder="sk-ant-…  (leave blank to keep current key)" autocomplete="off">
       </label>
-      <p class="help">Get one at console.anthropic.com → API Keys. It is stored only on this Mac.</p>
+      <p class="help">Optional. Without a key, use the "Copy prompt for Claude app" buttons with your Claude subscription.
+        With a key (console.anthropic.com → API Keys) the app does everything in one click. Stored only on this Mac.</p>
       <label>Business name <input name="business_name"></label>
       <label>Trade / type of work <input name="trade" placeholder="e.g. handyman, painting, flooring, remodeling"></label>
       <div class="row">
